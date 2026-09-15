@@ -1,0 +1,143 @@
+// eitb — command-line demonstrator for the ITB Groovy binding.
+//
+// Subcommands:
+//
+//   eitb version                                   library + binding versions
+//   eitb profiles                                  registered profile catalogue
+//   eitb encrypt <profile> <in-file> <out-file>    Single Message encrypt
+//   eitb decrypt <profile> <blob-hex> <in-file> <out-file>
+//
+// `encrypt` prints the session blob to stderr as hex; feed that hex
+// back to `decrypt` on the receiving side. `profiles` lists the
+// registered profile catalogue one name per line; the profiles that
+// carry a cipher surface are the ones `encrypt` / `decrypt` accept.
+
+package io.github.everanium.itb3.groovy.eitb
+
+import groovy.transform.CompileStatic
+
+import java.nio.file.Files
+import java.nio.file.Paths
+
+import io.github.everanium.itb3.groovy.ItbException
+import io.github.everanium.itb3.groovy.Pipeline
+import io.github.everanium.itb3.groovy.Runtime
+
+@CompileStatic
+final class Main {
+
+    private Main() {
+    }
+
+    static void main(String[] args) {
+        Runtime.setMemoryLimit(4L * 1024 * 1024 * 1024)
+        Runtime.setGCPercent(100)
+        int rc
+        try {
+            rc = dispatch(args)
+        } catch (ItbException e) {
+            System.err.println("eitb: ${e.message}")
+            rc = 1
+        } catch (Exception e) {
+            System.err.println("eitb: ${e.message}")
+            rc = 1
+        }
+        System.exit(rc)
+    }
+
+    private static int dispatch(String[] args) {
+        if (args.length == 1 && args[0] == 'version') {
+            return cmdVersion()
+        }
+        if (args.length == 1 && args[0] == 'profiles') {
+            return cmdProfiles()
+        }
+        if (args.length == 4 && args[0] == 'encrypt') {
+            return cmdEncrypt(args[1], args[2], args[3])
+        }
+        if (args.length == 5 && args[0] == 'decrypt') {
+            return cmdDecrypt(args[1], args[2], args[3], args[4])
+        }
+        System.err.println('''usage: eitb version
+       eitb profiles
+       eitb encrypt <profile> <in-file> <out-file>
+       eitb decrypt <profile> <blob-hex> <in-file> <out-file>''')
+        2
+    }
+
+    private static int cmdVersion() {
+        println "libitb3 ${Runtime.version()}"
+        println "itb-groovy ${Runtime.BINDING_VERSION}"
+        0
+    }
+
+    // Prints the registered profile catalogue one name per line in
+    // the sorted order Pipeline.profiles() returns.
+    private static int cmdProfiles() {
+        for (String name : Pipeline.profiles()) {
+            println name
+        }
+        0
+    }
+
+    // Profiles whose canonical name begins with "streaming-" route
+    // through the one-shot streaming buffered pair instead of the
+    // Single Message pair.
+    private static boolean isStreamingProfile(String profile) {
+        profile.startsWith('streaming-')
+    }
+
+    private static void ensureParentDir(String path) {
+        File parent = new File(path).parentFile
+        if (parent != null) {
+            parent.mkdirs()
+        }
+    }
+
+    private static int cmdEncrypt(String profile, String inFile, String outFile) {
+        byte[] plain = Files.readAllBytes(Paths.get(inFile))
+        Pipeline.withPipeline(profile) { Pipeline pipe ->
+            byte[] wire = isStreamingProfile(profile) ?
+                pipe.encryptStreamOneShot(plain) :
+                pipe.encryptMessage(plain)
+            ensureParentDir(outFile)
+            Files.write(Paths.get(outFile), wire)
+            System.err.println(hex(pipe.save()))
+            println "encrypted $inFile -> $outFile (${plain.length} -> ${wire.length} bytes)"
+        }
+        0
+    }
+
+    private static int cmdDecrypt(String profile, String blobHex, String inFile, String outFile) {
+        byte[] blob = unhex(blobHex)
+        byte[] wire = Files.readAllBytes(Paths.get(inFile))
+        Pipeline.withLoaded(blob) { Pipeline pipe ->
+            byte[] plain = isStreamingProfile(profile) ?
+                pipe.decryptStreamOneShot(wire) :
+                pipe.decryptMessage(wire)
+            ensureParentDir(outFile)
+            Files.write(Paths.get(outFile), plain)
+            println "decrypted $inFile -> $outFile (${wire.length} -> ${plain.length} bytes)"
+        }
+        0
+    }
+
+    private static String hex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder(bytes.length * 2)
+        for (byte b : bytes) {
+            sb.append(String.format('%02x', b & 0xff))
+        }
+        sb.toString()
+    }
+
+    private static byte[] unhex(String s) {
+        if (s.length() % 2 != 0) {
+            throw new IllegalArgumentException('odd-length hex string')
+        }
+        byte[] out = new byte[s.length().intdiv(2)]
+        for (int i = 0; i < out.length; i++) {
+            out[i] = (byte) Integer.parseInt(s.substring(2 * i, 2 * i + 2), 16)
+        }
+        out
+    }
+}
