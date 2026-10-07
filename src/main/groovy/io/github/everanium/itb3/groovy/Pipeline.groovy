@@ -88,7 +88,7 @@ final class Pipeline implements AutoCloseable {
 
     /** {@link #register} from a Groovy named-argument map whose keys
      * are the record's setter names ({@code mode}, {@code width},
-     * {@code hash}, {@code hashes}, {@code keyBits}, {@code mac},
+     * {@code hash}, {@code hashes}, {@code keyBits}, {@code drbg}, {@code mac},
      * {@code tagStub}, {@code chunk}, {@code wrapper}, {@code outer},
      * {@code parallax}, {@code palette}, {@code segment}):
      *
@@ -113,6 +113,7 @@ final class Pipeline implements AutoCloseable {
                 case 'hash': profile.hash(String.valueOf(value)); break
                 case 'hashes': profile.hashes(strings(value)); break
                 case 'keyBits': profile.keyBits(((Number) value).intValue()); break
+                case 'drbg': profile.drbg(String.valueOf(value)); break
                 case 'mac': profile.mac(String.valueOf(value)); break
                 case 'tagStub': profile.tagStub(((Number) value).intValue()); break
                 case 'chunk': profile.chunk(((Number) value).intValue()); break
@@ -143,6 +144,12 @@ final class Pipeline implements AutoCloseable {
     /** The sorted names of every registered profile. */
     static List<String> profiles() {
         ItbException.relay { JPipeline.profiles() }
+    }
+
+    /** The names of every hash primitive in the shipped registry, in
+     * the registry's own canonical order. */
+    static List<String> hashNames() {
+        ItbException.relay { JPipeline.hashNames() }
     }
 
     /** Scopes a fresh Pipeline inside {@code body}: init, run the

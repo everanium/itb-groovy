@@ -16,6 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals
 import static org.junit.jupiter.api.Assertions.assertEquals
 import static org.junit.jupiter.api.Assertions.assertFalse
 import static org.junit.jupiter.api.Assertions.assertNull
+import static org.junit.jupiter.api.Assertions.assertThrows
 import static org.junit.jupiter.api.Assertions.assertTrue
 
 @CompileStatic
@@ -79,10 +80,10 @@ class PersistTest {
             assertEquals('streaming-aead-triple-mac-v1', prof.name())
             assertEquals('streaming-aead', prof.mode())
             assertEquals(512, prof.width())
-            // The recipe fields match the registry entry; the two
+            // The recipe fields match the registry entry; the
             // inspection-only fields separate the two records.
             Profile registry = Pipeline.lookup('streaming-aead-triple-mac-v1')
-            assertEquals(registry, Profile.fromJson(prof.toJson()).nonceBits(null).barrierFill(null))
+            assertEquals(registry, Profile.fromJson(prof.toJson()).nonceBits(null).barrierFill(null).containerMode(null))
         }
     }
 
@@ -145,5 +146,62 @@ class PersistTest {
             pipe.maxWorkers(1000)
             assertArrayEquals(PLAIN, pipe.decryptMessage(pipe.encryptMessage(PLAIN)))
         }
+    }
+
+    @Test
+    void drbgRoundTripsThroughLoadedBlob() {
+        for (String drbg : ['csprng', 'aesitb128']) {
+            Pipeline.withPipeline('singlemsg-triple-mac-v1', new Opts().withDrbg(drbg)) { Pipeline sender ->
+                Pipeline.withLoaded(sender.save()) { Pipeline receiver ->
+                    assertArrayEquals(PLAIN, receiver.decryptMessage(sender.encryptMessage(PLAIN)))
+                    assertArrayEquals(PLAIN, sender.decryptMessage(receiver.encryptMessage(PLAIN)))
+                }
+            }
+        }
+    }
+
+    @Test
+    void inspectReportsTheDrbg() {
+        Pipeline.withPipeline('singlemsg-triple-mac-v1', new Opts().withDrbg('csprng')) { Pipeline pipe ->
+            Profile prof = Pipeline.inspect(pipe.save())
+            assertEquals('csprng', prof.drbg())
+            assertTrue(prof.toJson().contains('"drbg":"csprng"'))
+        }
+    }
+
+    @Test
+    void unknownDrbgIsRecipePrimitiveUnknown() {
+        def e = assertThrows(ItbException) {
+            Pipeline.init('singlemsg-triple-mac-v1', new Opts().withDrbg('nope'))
+        }
+        assertEquals(Status.RECIPE_PRIMITIVE_UNKNOWN, e.status)
+        assertTrue(e.message.contains('nope'))
+    }
+
+    @Test
+    void defaultDrbgIsAbsent() {
+        Pipeline.withPipeline('singlemsg-triple-mac-v1') { Pipeline pipe ->
+            Profile prof = Pipeline.inspect(pipe.save())
+            assertEquals('', prof.drbg())
+            assertFalse(prof.toJson().contains('"drbg"'))
+        }
+        assertEquals('', Pipeline.lookup('singlemsg-triple-mac-v1').drbg())
+    }
+
+    @Test
+    void registerCopyKeepsTheDrbg() {
+        Pipeline.withPipeline('singlemsg-triple-mac-v1', new Opts().withDrbg('csprng')) { Pipeline pipe ->
+            Profile copy = Pipeline.inspect(pipe.save())
+                    .name('').nonceBits(null).barrierFill(null).containerMode(null)
+            Pipeline.register('groovy-binding-test-drbg-copy', copy)
+            assertEquals('csprng', Pipeline.lookup('groovy-binding-test-drbg-copy').drbg())
+            Pipeline.withPipeline('groovy-binding-test-drbg-copy') { Pipeline sender ->
+                Pipeline.withLoaded(sender.save()) { Pipeline receiver ->
+                    assertEquals('csprng', Pipeline.inspect(sender.save()).drbg())
+                    assertArrayEquals(PLAIN, receiver.decryptMessage(sender.encryptMessage(PLAIN)))
+                }
+            }
+        }
+        assertEquals('csprng', Pipeline.profileOf(drbg: 'csprng').drbg())
     }
 }
